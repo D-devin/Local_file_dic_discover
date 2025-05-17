@@ -1,0 +1,2 @@
+# Local_file_dic_discover
+进行对本地文件夹的文本检索
