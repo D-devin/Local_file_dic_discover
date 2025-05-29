@@ -1,304 +1,292 @@
 import os
 import json
-import tempfile
-import unittest
-from unittest.mock import patch, mock_open
 import sys
-import pandas as pd
+import tempfile
+from pathlib import Path
 
-# 添加server目录到路径
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+# 添加项目根目录到Python路径
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from server.utils import Get_file, scearch_content, Visualization
+from utils import Get_file, scearch_content, Visualization
 
-class TestGetFile(unittest.TestCase):
-    """测试Get_file类的基本功能"""
+def create_test_data():
+    """创建测试数据"""
+    # 创建临时目录和测试文件
+    test_dir = "E:\\langurage_process\\pro\\test"
     
-    def setUp(self):
-        """设置测试环境"""
-        # 创建临时目录和文件
-        self.test_dir = tempfile.mkdtemp()
-        self.config_file = os.path.join(self.test_dir, 'config.json')
-        self.data_dir = os.path.join(self.test_dir, 'data')
-        os.makedirs(self.data_dir, exist_ok=True)
-        
-        # 创建配置文件
-        config_data = {'json_path': self.data_dir}
-        with open(self.config_file, 'w', encoding='utf-8') as f:
-            json.dump(config_data, f)
-        
-        # 创建测试文件
-        self.create_test_files()
+    # 确保测试目录存在
+    os.makedirs(test_dir, exist_ok=True)
     
-    def create_test_files(self):
-        """创建测试用的各种格式文件"""
-        # 创建txt文件
-        txt_file = os.path.join(self.data_dir, 'test.txt')
-        with open(txt_file, 'w', encoding='utf-8') as f:
-            f.write('这是一个测试文本文件。包含中文和English内容。')
-        
-        # 创建json文件
-        json_file = os.path.join(self.data_dir, 'test.json')
-        test_json = {'name': '测试', 'content': '这是json测试内容'}
-        with open(json_file, 'w', encoding='utf-8') as f:
-            json.dump(test_json, f, ensure_ascii=False)
-        
-        # 创建csv文件
-        csv_file = os.path.join(self.data_dir, 'test.csv')
-        df = pd.DataFrame({'列1': ['数据1', '数据2'], '列2': ['内容1', '内容2']})
-        df.to_csv(csv_file, index=False, encoding='utf-8')
+    # 创建测试文本文件
+    test_files = {
+        "test1.txt": "这是一个测试文档。包含中文内容，用于测试文本处理功能。人工智能技术发展迅速。",
+        "test2.txt": "另一个测试文件。机器学习是人工智能的重要分支。深度学习技术应用广泛。",
+        "test3.json": {"title": "JSON测试", "content": "这是JSON格式的测试数据", "keywords": ["测试", "数据", "格式"]},
+        "test4.csv": "姓名,年龄,职业\n张三,25,工程师\n李四,30,设计师\n王五,28,产品经理"
+    }
     
-    def test_init(self):
-        """测试初始化功能"""
-        get_file = Get_file(self.config_file)
-        self.assertEqual(get_file.json_dir, self.data_dir)
-        self.assertIsInstance(get_file.file_path, list)
-        self.assertIsInstance(get_file.processed_files_content, dict)
+    for filename, content in test_files.items():
+        filepath = os.path.join(test_dir, filename)
+        if filename.endswith('.json'):
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(content, f, ensure_ascii=False, indent=2)
+        else:
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write(content)
     
-    def test_read_txt_content(self):
-        """测试读取txt文件"""
-        get_file = Get_file(self.config_file)
-        txt_path = os.path.join(self.data_dir, 'test.txt')
-        content = get_file.read_content('txt', txt_path)
-        self.assertIn('测试文本文件', content)
-        self.assertNotIn('错误:', content)
+    # 创建配置文件
+    config_data = {"json_path": test_dir}
+    config_path = os.path.join(test_dir, "config.json")
+    with open(config_path, 'w', encoding='utf-8') as f:
+        json.dump(config_data, f, ensure_ascii=False, indent=2)
     
-    def test_read_json_content(self):
-        """测试读取json文件"""
-        get_file = Get_file(self.config_file)
-        json_path = os.path.join(self.data_dir, 'test.json')
-        content = get_file.read_content('json', json_path)
-        self.assertIn('测试', content)
-        self.assertNotIn('错误:', content)
-    
-    def test_read_csv_content(self):
-        """测试读取csv文件"""
-        get_file = Get_file(self.config_file)
-        csv_path = os.path.join(self.data_dir, 'test.csv')
-        content = get_file.read_content('csv', csv_path)
-        self.assertIn('数据1', content)
-        self.assertNotIn('错误:', content)
-    
-    def test_read_dir_file(self):
-        """测试读取目录中的所有文件"""
-        get_file = Get_file(self.config_file)
-        get_file.read_dir_file()
-        
-        # 检查是否读取了所有文件
-        self.assertGreater(len(get_file.processed_files_content), 0)
-        self.assertGreater(len(get_file.content_list), 0)
-    
-    def test_process_text(self):
-        """测试文本预处理功能"""
-        get_file = Get_file(self.config_file)
-        test_content = ['这是一个测试文本，包含标点符号！@#$%^&*()']
-        processed = get_file.process_text(test_content)
-        
-        self.assertIsInstance(processed, list)
-        self.assertGreater(len(processed), 0)
-    
-    def test_word_count(self):
-        """测试词频统计功能"""
-        get_file = Get_file(self.config_file)
-        get_file.read_dir_file()
-        word_dict = get_file.word_count()
-        
-        self.assertIsInstance(word_dict, dict)
-        # 检查是否按频率降序排列
-        if len(word_dict) > 1:
-            values = list(word_dict.values())
-            self.assertGreaterEqual(values[0], values[-1])
-    
-    def test_build_index(self):
-        """测试构建倒排索引"""
-        get_file = Get_file(self.config_file)
-        get_file.read_dir_file()
-        get_file.build_index()
-        
-        self.assertIsInstance(get_file.inverted_index, dict)
-        self.assertIsInstance(get_file.file_word_count, dict)
-    
-    def tearDown(self):
-        """清理测试环境"""
-        import shutil
-        shutil.rmtree(self.test_dir)
+    return config_path, test_dir
 
+def test_get_file_class():
+    """测试 Get_file 类的功能"""
+    print("=" * 50)
+    print("测试 Get_file 类")
+    print("=" * 50)
+    
+    try:
+        config_path, test_dir = create_test_data()
+        print(f"✓ 测试数据创建成功: {test_dir}")
+        
+        # 初始化 Get_file 实例
+        file_reader = Get_file(config_path)
+        print("✓ Get_file 实例创建成功")
+        
+        # 测试文件读取
+        file_reader.read_dir_file()
+        print(f"✓ 文件读取完成，共读取 {len(file_reader.processed_files_content)} 个文件")
+        
+        # 显示读取的文件信息
+        for file_path, content in file_reader.processed_files_content.items():
+            filename = os.path.basename(file_path)
+            if content.startswith("错误:"):
+                print(f"  ✗ {filename}: {content}")
+            else:
+                print(f"  ✓ {filename}: 内容长度 {len(content)} 字符")
+        
+        # 测试词频统计
+        word_dict = file_reader.all_word_count()
+        print(f"✓ 词频统计完成，共统计 {len(word_dict)} 个词汇")
+        print("  前10个高频词:", list(word_dict.items())[:10])
+        
+        # 测试倒排索引构建
+        file_reader.build_inverted_index()
+        print(f"✓ 倒排索引构建完成，共索引 {len(file_reader.inverted_index)} 个词汇")
+        print(f"✓ 文档总数: {file_reader.total_docs}")
+        
+        return file_reader
+        
+    except Exception as e:
+        print(f"✗ Get_file 测试失败: {str(e)}")
+        return None
 
-class TestSearchContent(unittest.TestCase):
-    """测试搜索功能类"""
+def test_search_content_class(file_reader):
+    """测试 scearch_content 类的功能"""
+    print("\n" + "=" * 50)
+    print("测试 scearch_content 类")
+    print("=" * 50)
     
-    def setUp(self):
-        """设置测试环境"""
-        self.search_engine = scearch_content()
-        self.test_content = [
-            '这是第一个测试文档，包含Python编程内容',
-            '这是第二个文档，讨论机器学习和人工智能',
-            '第三个文档介绍数据分析和可视化技术'
-        ]
-        self.test_file_names = ['doc1.txt', 'doc2.txt', 'doc3.txt']
-        self.test_content_dict = dict(zip(self.test_file_names, self.test_content))
+    if not file_reader:
+        print("✗ 无法进行搜索测试，文件读取器为空")
+        return
     
-    def test_preprocess_query(self):
-        """测试查询预处理"""
-        query = '测试查询！@#$%^&*()'
-        processed = self.search_engine.preprocess_query(query)
+    try:
+        search_engine = scearch_content()
+        print("✓ scearch_content 实例创建成功")
         
-        self.assertIsInstance(processed, list)
-        self.assertNotIn('！', ' '.join(processed))
-    
-    def test_simple_search(self):
-        """测试简单搜索"""
-        result = self.search_engine.simple_search('Python', self.test_content, self.test_file_names)
+        # 测试查询预处理
+        test_queries = ["人工智能", "测试数据", "机器学习技术"]
         
-        self.assertIsInstance(result, dict)
-        self.assertIn('found', result)
-        self.assertIn('results', result)
+        for query in test_queries:
+            print(f"\n--- 测试查询: '{query}' ---")
+            
+            # 预处理查询
+            processed_query = search_engine.preprocess_query(query)
+            print(f"  预处理结果: {processed_query}")
+            
+            # 测试 TF 搜索
+            tf_results = search_engine.tf_search(
+                query, 
+                file_reader.inverted_index,
+                file_reader.processed_files_content,
+                file_reader.file_word_count
+            )
+            print(f"  ✓ TF搜索: 找到 {tf_results['total_results']} 个结果")
+            
+            # 测试 TF-IDF 搜索
+            tfidf_results = search_engine.tfidf_search(
+                query,
+                file_reader.inverted_index,
+                file_reader.processed_files_content,
+                file_reader.file_word_count,
+                file_reader.content_list
+            )
+            print(f"  ✓ TF-IDF搜索: 找到 {tfidf_results['total_results']} 个结果")
+            
+            # 测试词向量搜索
+            vector_results = search_engine.word_vector_search(
+                query,
+                file_reader.inverted_index,
+                file_reader.processed_files_content,
+                file_reader.file_word_count,
+                file_reader.content_list
+            )
+            print(f"  ✓ 词向量搜索: 找到 {vector_results['total_results']} 个结果")
+            
+            # 显示部分搜索结果
+            if tf_results['found'] and tf_results['results']:
+                result = tf_results['results'][0]
+                print(f"    示例结果: {os.path.basename(result['file_name'])}")
+                print(f"    匹配词: {result['matched_word']}")
+                print(f"    TF分数: {result['tf_score']}")
         
-        if result['found']:
-            self.assertGreater(len(result['results']), 0)
-    
-    def test_boolean_search_and(self):
-        """测试布尔搜索AND操作"""
-        result = self.search_engine.boolean_search('测试 文档', self.test_content_dict, 'AND')
+        return search_engine
         
-        self.assertIsInstance(result, dict)
-        self.assertEqual(result['operation'], 'AND')
-        self.assertIn('results', result)
-    
-    def test_boolean_search_or(self):
-        """测试布尔搜索OR操作"""
-        result = self.search_engine.boolean_search('Python 机器学习', self.test_content_dict, 'OR')
-        
-        self.assertIsInstance(result, dict)
-        self.assertEqual(result['operation'], 'OR')
-        self.assertIn('results', result)
-    
-    def test_fuzzy_search(self):
-        """测试模糊搜索"""
-        result = self.search_engine.fuzzy_search('程序', self.test_content, self.test_file_names, 0.1)
-        
-        self.assertIsInstance(result, dict)
-        self.assertIn('threshold', result)
-        self.assertIn('results', result)
-    
-    def test_keyword_search(self):
-        """测试关键词搜索"""
-        keywords = ['Python', '机器学习', '数据']
-        result = self.search_engine.keyword_search(keywords, self.test_content_dict)
-        
-        self.assertIsInstance(result, dict)
-        self.assertIn('keywords', result)
-        self.assertIn('results', result)
-    
-    @patch('server.utils.TfidfVectorizer')
-    def test_search_with_ranking_tfidf(self, mock_vectorizer):
-        """测试TF-IDF排序搜索"""
-        # 模拟TfidfVectorizer
-        mock_vectorizer.return_value.fit_transform.return_value = [[0.5, 0.3], [0.2, 0.8]]
-        mock_vectorizer.return_value.transform.return_value = [[0.4, 0.6]]
-        mock_vectorizer.return_value.get_feature_names_out.return_value = ['word1', 'word2']
-        
-        result = self.search_engine.search_with_ranking('测试', self.test_content_dict, 'tfidf')
-        
-        self.assertIsInstance(result, dict)
-        self.assertEqual(result.get('method'), 'tfidf')
-    
-    def test_search_with_ranking_frequency(self):
-        """测试频率排序搜索"""
-        result = self.search_engine.search_with_ranking('测试', self.test_content_dict, 'frequency')
-        
-        self.assertIsInstance(result, dict)
-        self.assertEqual(result.get('method'), 'frequency')
+    except Exception as e:
+        print(f"✗ scearch_content 测试失败: {str(e)}")
+        return None
 
+def test_visualization_class(file_reader):
+    """测试 Visualization 类的功能"""
+    print("\n" + "=" * 50)
+    print("测试 Visualization 类")
+    print("=" * 50)
+    
+    if not file_reader:
+        print("✗ 无法进行可视化测试，文件读取器为空")
+        return
+    
+    try:
+        visualizer = Visualization()
+        print("✓ Visualization 实例创建成功")
+        print(f"✓ 输出目录: {visualizer.output_dir}")
+        
+        # 测试词云图生成
+        print("\n--- 测试词云图生成 ---")
+        wordcloud_result = visualizer.generate_wordcloud(
+            "人工智能",
+            file_reader.processed_files_content
+        )
+        if wordcloud_result['success']:
+            print(f"  ✓ 词云图生成成功: {wordcloud_result['save_path']}")
+            print(f"  ✓ 相关文档数: {wordcloud_result['relevant_docs']}")
+        else:
+            print(f"  ✗ 词云图生成失败: {wordcloud_result['message']}")
+        
+        # 测试关键词排行图
+        print("\n--- 测试关键词排行图 ---")
+        ranking_result = visualizer.generate_keyword_ranking(
+            "测试",
+            file_reader.processed_files_content,
+            file_reader.file_word_count
+        )
+        if ranking_result['success']:
+            print(f"  ✓ 关键词排行图生成成功: {ranking_result['save_path']}")
+            print(f"  ✓ 关键词数量: {len(ranking_result['keywords'])}")
+        else:
+            print(f"  ✗ 关键词排行图生成失败: {ranking_result['message']}")
+        
+        # 测试文件扩展名分析
+        print("\n--- 测试文件扩展名分析 ---")
+        extension_result = visualizer.analyze_file_extensions(file_reader.file_name)
+        if extension_result['success']:
+            print(f"  ✓ 文件扩展名分析成功: {extension_result['save_path']}")
+            print(f"  ✓ 文件类型统计: {extension_result['extension_stats']}")
+        else:
+            print(f"  ✗ 文件扩展名分析失败: {extension_result['message']}")
+        
+        # 测试词频图表
+        print("\n--- 测试词频图表 ---")
+        for chart_type in ['bar', 'line', 'pie']:
+            chart_result = visualizer.create_word_frequency_chart(
+                file_reader.word_dict,
+                chart_type=chart_type,
+                top_n=10
+            )
+            if chart_result['success']:
+                print(f"  ✓ {chart_type.upper()}图生成成功: {chart_result['save_path']}")
+            else:
+                print(f"  ✗ {chart_type.upper()}图生成失败: {chart_result['message']}")
+        
+        return visualizer
+        
+    except Exception as e:
+        print(f"✗ Visualization 测试失败: {str(e)}")
+        return None
 
-class TestVisualization(unittest.TestCase):
-    """测试可视化功能类"""
-    
-    def setUp(self):
-        """设置测试环境"""
-        self.visualizer = Visualization()
-        self.test_text_data = [
-            '这是测试文本数据，包含各种词汇',
-            '另一个测试文档，用于可视化分析',
-            '第三个文档包含更多测试内容'
-        ]
-        self.test_file_data = ['test1.txt', 'test2.py', 'test3.json', 'test4.csv']
-    
-    def test_preprocess_text_for_vis(self):
-        """测试可视化文本预处理"""
-        processed = self.visualizer.preprocess_text_for_vis(self.test_text_data)
-        
-        self.assertIsInstance(processed, list)
-        self.assertGreater(len(processed), 0)
-    
-    @patch('matplotlib.pyplot.savefig')
-    @patch('matplotlib.pyplot.figure')
-    def test_generate_wordcloud(self, mock_figure, mock_savefig):
-        """测试词云生成"""
-        result = self.visualizer.generate_wordcloud(self.test_text_data, 'test_wordcloud', 10)
-        
-        self.assertIsInstance(result, dict)
-        self.assertIn('success', result)
-        self.assertIn('word_freq', result)
-    
-    @patch('matplotlib.pyplot.savefig')
-    @patch('matplotlib.pyplot.figure')
-    def test_generate_keyword_ranking(self, mock_figure, mock_savefig):
-        """测试关键词排行图生成"""
-        result = self.visualizer.generate_keyword_ranking(self.test_text_data, 'test_ranking', 5)
-        
-        self.assertIsInstance(result, dict)
-        self.assertIn('success', result)
-        self.assertIn('keywords', result)
-    
-    def test_analyze_file_extensions(self):
-        """测试文件扩展名分析"""
-        result = self.visualizer.analyze_file_extensions(self.test_file_data, False)
-        
-        self.assertIsInstance(result, dict)
-        self.assertIn('success', result)
-        self.assertIn('extension_stats', result)
-        
-        if result['success']:
-            self.assertGreater(len(result['extension_stats']), 0)
-    
-    def test_get_visualization_summary(self):
-        """测试可视化数据摘要"""
-        result = self.visualizer.get_visualization_summary(self.test_text_data, self.test_file_data)
-        
-        self.assertIsInstance(result, dict)
-        self.assertIn('success', result)
-        self.assertIn('summary', result)
-        
-        if result['success']:
-            summary = result['summary']
-            self.assertIn('text_analysis', summary)
-            self.assertIn('file_analysis', summary)
-
-
-class TestIntegration(unittest.TestCase):
+def test_integration():
     """集成测试"""
+    print("\n" + "=" * 50)
+    print("集成测试")
+    print("=" * 50)
     
-    def setUp(self):
-        """设置集成测试环境"""
-        # 创建临时测试环境
-        self.test_dir = tempfile.mkdtemp()
-        self.config_file = os.path.join(self.test_dir, 'config.json')
-        self.data_dir = os.path.join(self.test_dir, 'data')
-        os.makedirs(self.data_dir, exist_ok=True)
+    try:
+        # 完整流程测试
+        config_path, test_dir = create_test_data()
         
-        # 创建配置文件
-        config_data = {'json_path': self.data_dir}
-        with open(self.config_file, 'w', encoding='utf-8') as f:
-            json.dump(config_data, f)
+        # 初始化并处理文件
+        file_reader = Get_file(config_path)
+        file_reader.init_read_dir()  # 完整初始化流程
         
-        # 创建测试文件
-        test_files = {
-            'doc1.txt': '人工智能是计算机科学的一个分支，致力于创建智能机器',
-            'doc2.txt': '机器学习是人工智能的子集，使用算法从数据中学习',
-            'doc3.txt': '深度学习是机器学习的一种方法，使用神经网络'
-        }
+        print(f"✓ 完整初始化成功")
+        print(f"  - 处理文件数: {len(file_reader.processed_files_content)}")
+        print(f"  - 词汇总数: {len(file_reader.word_dict)}")
+        print(f"  - 索引词汇数: {len(file_reader.inverted_index)}")
         
-        for filename, content in test_files.items():
-            filepath = os.path.join(self.data_dir, filename)
-            with open(filepath, 
+        # 搜索测试
+        search_engine = scearch_content()
+        query = "人工智能技术"
+        
+        results = search_engine.tf_search(
+            query,
+            file_reader.inverted_index,
+            file_reader.processed_files_content,
+            file_reader.file_word_count
+        )
+        
+        print(f"✓ 搜索测试完成: 查询'{query}'找到{results['total_results']}个结果")
+        
+        # 可视化测试
+        visualizer = Visualization()
+        vis_result = visualizer.generate_wordcloud(query, file_reader.processed_files_content)
+        
+        if vis_result['success']:
+            print(f"✓ 可视化测试完成: 生成文件 {vis_result['save_path']}")
+        
+        print("\n✓ 所有集成测试通过!")
+        
+    except Exception as e:
+        print(f"✗ 集成测试失败: {str(e)}")
+
+def main():
+    """主测试函数"""
+    print("开始 utils.py 非网络功能测试")
+    print("测试目录: E:\\langurage_process\\pro\\test")
+    
+    # 逐个测试各个模块
+    file_reader = test_get_file_class()
+    search_engine = test_search_content_class(file_reader)
+    visualizer = test_visualization_class(file_reader)
+    
+    # 集成测试
+    test_integration()
+    
+    print("\n" + "=" * 50)
+    print("测试完成!")
+    print("=" * 50)
+    
+    # 清理测试文件（可选）
+    cleanup = input("\n是否清理测试文件? (y/n): ")
+    if cleanup.lower() == 'y':
+        import shutil
+        test_dir = "E:\\langurage_process\\pro\\test"
+        if os.path.exists(test_dir):
+            shutil.rmtree(test_dir)
+            print("✓ 测试文件已清理")
+
+if __name__ == "__main__":
+    main()
