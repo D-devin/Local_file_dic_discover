@@ -1049,18 +1049,18 @@ class APIHandler:
             data = request.get_json()
             if not data:
                 return self._create_response(False, error="请求数据为空")
-                
+
             config_path = data.get('config_path')
             if not config_path:
                 return self._create_response(False, error="配置文件路径不能为空")
-            
+
             # 添加文件存在性检查
             if not os.path.exists(config_path):
                 return self._create_response(False, error="配置文件不存在")
-                
+
             self.file_reader = Get_file(config_path)
             self.file_reader.init_read_dir()
-            
+
             # 生成会话ID
             session_id = str(uuid.uuid4())
             self.cache[session_id] = {
@@ -1070,9 +1070,27 @@ class APIHandler:
             return self._create_response(True, data={'session_id': session_id}, message="配置文件上传成功")
         except Exception as e:
             return self._handle_error(e, "上传配置文件")
-    
 
-    #search API 
+
+    #search API
+    def tf_search(self):
+        """"词频搜索"""
+        try:
+            data = request.get_json()
+            session_id = data.get('session_id')
+            query = data.get('query', '')
+            if not session_id or session_id not in self.cache:
+                return self._create_response(False, error="无效的会话ID")
+            
+            file_processor = self.cache[session_id]['file_reader']
+            inverted_index = file_processor.inverted_index
+            processed_files_content = file_processor.processed_files_content
+            file_word_count = file_processor.file_word_count
+            results = self.search_engine.tf_search(query, inverted_index, processed_files_content, file_word_count)
+            return self._create_response(True, data=results, message="TF检索成功")
+        except Exception as e:
+            return self._handle_error(e, "TF检索")
+ 
     def tfidf_search(self):
         """"TF-IDF搜索"""
         try:
