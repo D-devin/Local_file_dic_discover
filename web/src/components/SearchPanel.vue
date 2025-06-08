@@ -3,10 +3,11 @@
     <div class="search-header">
       <h3>🔍 智能搜索</h3>
       <select v-model="searchType" class="search-type-select">
-        <option value="tf">TF 词频搜索</option>
-        <option value="tfidf">TF-IDF 搜索</option>
-        <option value="word_vector">词向量搜索</option>
-      </select>
+      <option value="textrank">TextRank 搜索</option>
+      <option value="tfidf">TF-IDF 搜索</option>
+      <option value="lsi">LSI 语义搜索</option>
+</select>
+
     </div>
     
     <div class="search-input-group">
@@ -37,9 +38,18 @@
             </span>
           </div>
           <div class="result-preview">{{ result.content_preview }}</div>
-          <div v-if="result.matched_words" class="matched-words">
-            <span class="tag" v-for="word in result.matched_words" :key="word">{{ word }}</span>
+          <div v-if="getMatchedWords(result)" class="matched-words">
+            <span class="tag" v-for="word in getMatchedWords(result)" :key="word">{{ word }}</span>
           </div>
+          <div v-if="result.algorithm === 'LSI' && result.lsi_components" class="lsi-info">
+            <div class="lsi-components">
+              <span class="info-label">语义主题:</span>
+              <span v-for="component in result.lsi_components.slice(0, 3)" :key="component.dimension" class="lsi-tag">
+                主题{{ component.dimension }}({{ component.doc_weight }})
+              </span>
+            </div>
+          </div>
+
           <div v-if="result.positions" class="positions-info">
             位置: {{ result.positions.join(', ') }}
           </div>
@@ -71,7 +81,7 @@ export default {
   data() {
     return {
       searchQuery: '',
-      searchType: 'tf'
+      searchType: 'textrank'
     }
   },
   methods: {
@@ -84,24 +94,45 @@ export default {
       });
     },
     
-    // 格式化分数显示
+
+// 格式化分数显示
     formatScore(result, searchType) {
       switch (searchType) {
-        case 'tf':
-          return `词频: ${result.word_frequency} (TF: ${result.tf_score})`;
+        case 'textrank':
+          return `TextRank: ${result.textrank_score || 0} (相关性: ${result.relevance_score || 0})`;
         case 'tfidf':
-          return `TF-IDF: ${result.tfidf_score}`;
-        case 'word_vector':
-          return `向量相似度: ${result.vector_similarity}`;
+          return `TF-IDF: ${result.tfidf_score || 0} (${result.relevance || 'medium'})`;
+        case 'lsi':
+          return `LSI相似度: ${result.lsi_similarity || 0} (${result.relevance || 'medium'})`;
         default:
-          return '';
+          return '未知算法';
       }
     },
+
     
     // 从路径中提取文件名
     getFileName(fullPath) {
       return fullPath.split('/').pop() || fullPath;
-    }
+    },
+    // 获取匹配的词汇
+    getMatchedWords(result) {
+      if (result.matched_words) {
+        // TextRank和TF-IDF返回的是字符串数组或对象数组
+        if (Array.isArray(result.matched_words)) {
+          return result.matched_words.map(word => 
+            typeof word === 'string' ? word : word.word || word
+          );
+        }
+      }
+
+      if (result.semantic_matched_words) {
+        // LSI返回的语义匹配词
+        return result.semantic_matched_words.map(item => item.word);
+      }
+
+      return [];
+},
+
   }
 }
 </script>
@@ -256,4 +287,32 @@ export default {
   font-size: 3rem;
   margin-bottom: 1rem;
 }
+.lsi-info {
+  margin-top: 0.5rem;
+  padding: 0.5rem;
+  background: #f8f9fa;
+  border-radius: 4px;
+  font-size: 0.875rem;
+}
+
+.lsi-components {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.info-label {
+  color: #6c757d;
+  font-weight: 500;
+}
+
+.lsi-tag {
+  background: #fff3cd;
+  color: #856404;
+  padding: 0.25rem 0.5rem;
+  border-radius: 12px;
+  font-size: 0.75rem;
+}
+
 </style>

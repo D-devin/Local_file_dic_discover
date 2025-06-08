@@ -31,9 +31,9 @@ class APIHandler:
         self.app.add_url_rule('/health', 'health_check', self.health_check, methods=['GET'])
         self.app.add_url_rule('/process_folder', 'process_folder', self.process_folder, methods=['POST'])
         # 搜索功能路由
-        self.app.add_url_rule('/tf_search', 'tf_search', self.tf_search, methods=['POST'])
+        self.app.add_url_rule('/textrank_search', 'textrank_search', self.textrank_search, methods=['POST'])
         self.app.add_url_rule('/tfidf_search', 'tfidf_search', self.tfidf_search, methods=['POST'])
-        self.app.add_url_rule('/word_vector_search', 'word_vector_search', self.word_vector_search, methods=['POST'])
+        self.app.add_url_rule('/lsi_search', 'lsi_search', self.lsi_search, methods=['POST'])
 
         # 可视化功能路由
         self.app.add_url_rule('/generate_wordcloud', 'generate_wordcloud', self.generate_wordcloud, methods=['POST'])
@@ -131,23 +131,31 @@ class APIHandler:
 
 
     #search API
-    def tf_search(self):
-        """"词频搜索"""
+    def textrank_search(self):
+        """TextRank搜索"""
         try:
             data = request.get_json()
             session_id = data.get('session_id')
             query = data.get('query', '')
+            window_size = data.get('window_size', 3)  # 可选参数：共现窗口大小
+            damping = data.get('damping', 0.85)  # 可选参数：阻尼系数
+
             if not session_id or session_id not in self.cache:
                 return self._create_response(False, error="无效的会话ID")
-            
+
             file_processor = self.cache[session_id]['file_reader']
             inverted_index = file_processor.inverted_index
             processed_files_content = file_processor.processed_files_content
             file_word_count = file_processor.file_word_count
-            results = self.search_engine.tf_search(query, inverted_index, processed_files_content, file_word_count)
-            return self._create_response(True, data=results, message="TF检索成功")
+
+            results = self.search_engine.textrank_search(
+                query, inverted_index, processed_files_content, 
+                file_word_count, window_size, damping
+            )
+
+            return self._create_response(True, data=results, message="TextRank检索成功")
         except Exception as e:
-            return self._handle_error(e, "TF检索")
+            return self._handle_error(e, "TextRank检索")
  
     def tfidf_search(self):
         """"TF-IDF搜索"""
@@ -168,24 +176,31 @@ class APIHandler:
         except Exception as e:
             return self._handle_error(e, "TF-IDF检索")
 
-    def word_vector_search(self):
-        """"词向量搜索"""
+    def lsi_search(self):
+        """LSI潜在语义索引搜索"""
         try:
             data = request.get_json()
             session_id = data.get('session_id')
             query = data.get('query', '')
-            if not session_id or session_id not in self.cache: 
+            n_components = data.get('n_components', 100)  # 可选参数：LSI维度数
+            
+            if not session_id or session_id not in self.cache:
                 return self._create_response(False, error="无效的会话ID")
-
+    
             file_processor = self.cache[session_id]['file_reader']
             inverted_index = file_processor.inverted_index
             processed_files_content = file_processor.processed_files_content
             file_word_count = file_processor.file_word_count
-            all_content = file_processor.content_list  # 修复：使用 content_list 而不是 all_content
-            results = self.search_engine.word_vector_search(query, inverted_index, processed_files_content, file_word_count, all_content)   
-            return self._create_response(True, data=results, message="词向量检索成功")
+            all_content = file_processor.content_list
+    
+            results = self.search_engine.lsi_search(
+                query, inverted_index, processed_files_content, 
+                file_word_count, all_content, n_components
+            )
+    
+            return self._create_response(True, data=results, message="LSI检索成功")
         except Exception as e:
-            return self._handle_error(e, "词向量检索")
+            return self._handle_error(e, "LSI检索")
 
     # visualize API
     def generate_wordcloud(self):
@@ -525,6 +540,20 @@ class ServerManager:
         
         # 启动服务器
         self.api_handler.run_server(host=host, port=port, debug=debug)
+    def _check_dependencies(self):
+        """检查必要的依赖包"""
+        required_packages = ['networkx', 'scipy']
+        missing_packages = []
+
+        for package in required_packages:
+            try:
+                __import__(package)
+            except ImportError:
+                missing_packages.append(package)
+
+        if missing_packages:
+            print(f"警告: 缺少以下依赖包: {', '.join(missing_packages)}")
+            print("请运行: pip install " + " ".join(missing_packages))
 
 
 # 使用示例和启动脚本

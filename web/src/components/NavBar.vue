@@ -2,6 +2,7 @@
   <nav class="navbar">
     <div class="nav-brand">
       <h1>📚 文档智能检索系统</h1>
+      <p class="student-info">202258334099 戴兰洋</p>
     </div>
     <div class="nav-status">
       <div class="status-badge" :class="{ online: healthStatus, offline: !healthStatus }">
@@ -107,4 +108,12 @@ export default {
   background: rgba(255, 255, 255, 0.3);
   transform: rotate(180deg);
 }
+.student-info {
+  margin: 0;
+  font-size: 0.8rem;
+  font-weight: 300;
+  opacity: 0.9;
+  margin-top: 0.2rem;
+}
+
 </style>

@@ -214,48 +214,49 @@ export default {
         this.showMessage('服务连接失败', 'error');
       }
     },
-    
+
     // 执行搜索
     async handleSearch(searchData) {
-    const { query, type } = searchData;
-      
-    this.setLoading(true, '正在搜索...');
-      
-    try {
-      let endpoint;
-      switch (type) {
-        case 'tf':
-          endpoint = '/tf_search';
-          break;
-        case 'tfidf':
-          endpoint = '/tfidf_search';
-          break;
-        case 'word_vector':
-          endpoint = '/word_vector_search';
-          break;
-        default:
-          endpoint = '/tf_search';
-      }
+      const { query, type } = searchData;
 
-      const response = await axios.post(`${this.apiBaseUrl}${endpoint}`, {
-        session_id: this.sessionId,
-        query: query
-      });
+      this.setLoading(true, '正在搜索...');
 
-      if (response.data.success) {
-        this.searchResults = response.data.data;
-        this.showMessage(`找到 ${this.searchResults.total_results} 个结果`);
-      } else {
-        this.showMessage(`搜索失败: ${response.data.error}`, 'error');
+      try {
+        let endpoint;
+        switch (type) {
+          case 'textrank':
+            endpoint = '/textrank_search';
+            break;
+          case 'tfidf':
+            endpoint = '/tfidf_search';
+            break;
+          case 'lsi':
+            endpoint = '/lsi_search';
+            break;
+          default:
+            endpoint = '/textrank_search';  // 默认使用TextRank
+        }
+      
+        const response = await axios.post(`${this.apiBaseUrl}${endpoint}`, {
+          session_id: this.sessionId,
+          query: query
+        });
+      
+        if (response.data.success) {
+          this.searchResults = response.data.data;
+          this.showMessage(`找到 ${this.searchResults.total_results} 个结果`);
+        } else {
+          this.showMessage(`搜索失败: ${response.data.error}`, 'error');
+          this.searchResults = null;
+        }
+      } catch (error) {
+        this.showMessage('搜索请求失败: ' + error.message, 'error');
         this.searchResults = null;
+      } finally {
+        this.setLoading(false);
       }
-    } catch (error) {
-      this.showMessage('搜索请求失败: ' + error.message, 'error');
-      this.searchResults = null;
-    } finally {
-      this.setLoading(false);
-    }
-    },  
+    },
+ 
     // 处理文件夹路径提交
     async handleFolderSubmit(data) {
       if (data.error) {

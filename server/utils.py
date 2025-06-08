@@ -1,7 +1,5 @@
 import os 
 import json 
-import logging
-import requests
 import numpy as np 
 import pandas as pd
 import jieba 
@@ -18,9 +16,15 @@ import seaborn as sns
 from wordcloud import WordCloud
 from collections import Counter
 import matplotlib
-import traceback
 from datetime import datetime
-import uuid
+import networkx as nx
+from itertools import combinations
+from scipy.spatial.distance import cosine
+from sklearn.decomposition import TruncatedSVD
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import Normalizer
+
+
 matplotlib.rcParams['font.sans-serif'] = ['SimHei', 'Arial Unicode MS', 'DejaVu Sans']
 matplotlib.rcParams['axes.unicode_minus'] = False
 from sklearn.metrics.pairwise import cosine_similarity
@@ -98,8 +102,6 @@ class Get_file:
                 return f"读取CSV文件时发生错误: {e}"
         elif kind == 'xlsx' or kind == 'xls':
             try:
-                # pd.read_excel 的 encoding 参数通常不直接使用，它会自动处理或通过io指定
-                # sheet_name=None 读取所有工作表
                 excel_data = pd.read_excel(file_path, sheet_name=None)
                 all_sheets_content = []
                 if isinstance(excel_data, dict): # 如果有多个工作表
@@ -114,6 +116,75 @@ class Get_file:
                 return f"错误: 文件 '{file_path}' 未找到。"
             except Exception as e:
                 return f"读取Excel文件时发生错误: {e}"
+        elif kind == 'html':
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    html_content = f.read()
+                # 使用BeautifulSoup解析HTML并提取文本
+                soup = BeautifulSoup(html_content, 'html.parser')
+                # 移除script和style标签
+                for script in soup(["script", "style"]):
+                    script.decompose()
+                # 提取纯文本
+                content = soup.get_text()
+                # 清理多余的空白字符
+                content = re.sub(r'\n\s*\n', '\n\n', content)
+                content = re.sub(r' +', ' ', content)
+                return content.strip()
+            except FileNotFoundError:
+                return f"错误: 文件 '{file_path}' 未找到。"
+            except Exception as e:
+                return f"读取HTML文件时发生错误: {e}"
+        elif kind == 'docx':
+            try:
+                doc = Document(file_path)
+                content_parts = []
+                # 读取所有段落
+                for paragraph in doc.paragraphs:
+                    if paragraph.text.strip():
+                        content_parts.append(paragraph.text.strip())
+
+                # 读取表格内容
+                for table in doc.tables:
+                    for row in table.rows:
+                        row_text = []
+                        for cell in row.cells:
+                            if cell.text.strip():
+                                row_text.append(cell.text.strip())
+                        if row_text:
+                            content_parts.append(' | '.join(row_text))
+
+                content = '\n'.join(content_parts)
+                return content if content else "文档内容为空"
+            except FileNotFoundError:
+                return f"错误: 文件 '{file_path}' 未找到。"
+            except Exception as e:
+                return f"读取DOCX文件时发生错误: {e}"
+        elif kind == 'pdf':
+            try:
+                # 使用PyMuPDF (fitz) 读取PDF文件
+                pdf_document = fitz.open(file_path)
+                content_parts = []
+
+                # 遍历所有页面
+                for page_num in range(pdf_document.page_count):
+                    page = pdf_document[page_num]
+                    # 提取页面文本
+                    page_text = page.get_text()
+                    if page_text.strip():
+                        content_parts.append(f"--- 第{page_num + 1}页 ---")
+                        content_parts.append(page_text.strip())
+
+                pdf_document.close()
+
+                content = '\n\n'.join(content_parts)
+                return content if content else "PDF文档内容为空或无法提取文本"
+
+            except FileNotFoundError:
+                return f"错误: 文件 '{file_path}' 未找到。"
+            except Exception as e:
+                return f"读取PDF文件时发生错误: {e}"
+
         else :
             return f"错误: 未知或不支持的文件类型 '{kind}'"  # 返回错误信息而不是空值
     #洁词
@@ -170,30 +241,29 @@ class Get_file:
                 continue
             words = processed_content[0].split()
             self.total_docs += 1  # 记录文档总数
-            # 文档级词频统计
+
             doc_word_count = {}
             for pos, word in enumerate(words):
                 if not word:
                     continue
-                # 更新文档词频
+
                 doc_word_count[word] = doc_word_count.get(word, 0) + 1
-                # 初始化倒排索引项
+          
                 if word not in self.inverted_index:
                     self.inverted_index[word] = {
-                        'doc_freq': 0,  # 包含该词的文档数
-                        'postings': {}   # 文档ID: {频率, 位置}
+                        'doc_freq': 0,  
+                        'postings': {}  
                     }
-                # 初始化文档项
+          
                 if file_name not in self.inverted_index[word]['postings']:
                     self.inverted_index[word]['postings'][file_name] = {
                         'freq': 0,
                         'positions': []
                     }
-                    self.inverted_index[word]['doc_freq'] += 1  # 更新文档频率
-                # 更新词项信息
+                    self.inverted_index[word]['doc_freq'] += 1 
                 posting = self.inverted_index[word]['postings'][file_name]
                 posting['freq'] += 1
-                posting['positions'].append(pos)  # 记录位置信息
+                posting['positions'].append(pos) 
             
             self.file_word_count[file_name] = doc_word_count
 
@@ -260,13 +330,211 @@ class scearch_content:
             preview = preview + "..."
     
         return preview
-    
-    # 词频检索
-    def tf_search(self, query: str, inverted_index: Dict[str, Any], processed_files_content: Dict[str, str], file_word_count: Dict[str, any]) -> Dict[str, Any]:
+    def _calculate_textrank_scores(self, words: List[str], window_size: int = 3, damping: float = 0.85, max_iter: int = 100, tolerance: float = 1e-4) -> Dict[str, float]:
         """
-        基于词频的检索（使用优化后的倒排索引）
+        计算词汇的TextRank分数
+
+        Args:
+            words: 预处理后的词汇列表
+            window_size: 共现窗口大小
+            damping: 阻尼系数
+            max_iter: 最大迭代次数
+            tolerance: 收敛阈值
+
+        Returns:
+            词汇TextRank分数字典
+        """
+        if len(words) < 2:
+            return {word: 1.0 for word in words}
+
+        # 构建词汇共现图
+        word_graph = self._build_word_graph(words, window_size)
+
+        if not word_graph.nodes():
+            return {word: 1.0 for word in set(words)}
+
+        # 初始化分数
+        unique_words = list(word_graph.nodes())
+        scores = {word: 1.0 for word in unique_words}
+
+        # 迭代计算TextRank分数
+        for iteration in range(max_iter):
+            new_scores = {}
+
+            for word in unique_words:
+                # 计算入链权重和
+                in_weight_sum = 0
+                neighbors = list(word_graph.neighbors(word))
+
+                for neighbor in neighbors:
+                    neighbor_out_degree = word_graph.degree(neighbor)
+                    if neighbor_out_degree > 0:
+                        edge_weight = word_graph[neighbor][word].get('weight', 1.0)
+                        in_weight_sum += (scores[neighbor] * edge_weight) / neighbor_out_degree
+
+                # TextRank公式
+                new_scores[word] = (1 - damping) + damping * in_weight_sum
+
+            # 检查收敛
+            converged = True
+            for word in unique_words:
+                if abs(new_scores[word] - scores[word]) > tolerance:
+                    converged = False
+                    break
+                
+            scores = new_scores
+
+            if converged:
+                break
+            
+        # 归一化分数
+        max_score = max(scores.values()) if scores else 1.0
+        if max_score > 0:
+            scores = {word: score / max_score for word, score in scores.items()}
+
+        return scores
+
+    def _build_word_graph(self, words: List[str], window_size: int) -> nx.Graph:
+        """
+        构建词汇共现图
+
+        Args:
+            words: 词汇列表
+            window_size: 共现窗口大小
+
+        Returns:
+            词汇共现图
+        """
+        graph = nx.Graph()
+
+        # 添加节点
+        unique_words = list(set(words))
+        graph.add_nodes_from(unique_words)
+
+        # 计算词汇共现关系
+        word_pairs = {}
+
+        for i in range(len(words)):
+            for j in range(i + 1, min(i + window_size + 1, len(words))):
+                word1, word2 = words[i], words[j]
+                if word1 != word2:
+                    pair = tuple(sorted([word1, word2]))
+                    word_pairs[pair] = word_pairs.get(pair, 0) + 1
+
+        # 添加边和权重
+        for (word1, word2), weight in word_pairs.items():
+            if weight > 0:
+                graph.add_edge(word1, word2, weight=weight)
+
+        return graph
+
+    def _calculate_sentence_similarity(self, sent1: List[str], sent2: List[str]) -> float:
+        """
+        计算句子相似度（用于文档级TextRank）
+
+        Args:
+            sent1: 第一个句子的词汇列表
+            sent2: 第二个句子的词汇列表
+
+        Returns:
+            相似度分数
+        """
+        if not sent1 or not sent2:
+            return 0.0
+
+        # 计算词汇交集
+        common_words = set(sent1) & set(sent2)
+
+        if not common_words:
+            return 0.0
+
+        # 使用Jaccard相似度
+        union_words = set(sent1) | set(sent2)
+        similarity = len(common_words) / len(union_words)
+
+        return similarity
+    def _get_top_lsi_terms(self, lsi_pipeline, feature_names, doc_vector, top_n: int = 5) -> List[Dict[str, Any]]:
+        """
+        获取文档在LSI空间中的主要语义成分
+
+        Args:
+            lsi_pipeline: 训练好的LSI pipeline
+            feature_names: 特征名称列表
+            doc_vector: 文档在LSI空间的向量表示
+            top_n: 返回前N个主要成分
+
+        Returns:
+            主要LSI成分列表
+        """
+        try:
+            # 获取SVD组件
+            svd = lsi_pipeline.named_steps['svd']
+
+            # 获取最重要的LSI维度
+            top_dimensions = abs(doc_vector).argsort()[::-1][:top_n]
+
+            lsi_components = []
+            for dim_idx in top_dimensions:
+                if dim_idx < len(svd.components_):
+                    # 获取该维度对应的词汇权重
+                    component = svd.components_[dim_idx]
+                    top_terms_idx = abs(component).argsort()[::-1][:5]
+
+                    terms_info = []
+                    for term_idx in top_terms_idx:
+                        if term_idx < len(feature_names):
+                            terms_info.append({
+                                'term': feature_names[term_idx],
+                                'weight': round(component[term_idx], 4)
+                            })
+
+                    lsi_components.append({
+                        'dimension': int(dim_idx),
+                        'doc_weight': round(doc_vector[dim_idx], 4),
+                        'top_terms': terms_info
+                    })
+
+            return lsi_components
+        except Exception as e:
+                    print(f"获取LSI成分时发生错误: {e}")
+                    return []
+    def _preprocess_for_lsi(self, content: str) -> str:
+            """
+            专门为LSI算法预处理文本
+            Args:
+                content: 原始文本内容
+            Returns:
+                预处理后的文本
+            """
+            # 去除特殊字符，保留中文、英文、数字
+            content = re.sub(r'[^\u4e00-\u9fa5a-zA-Z0-9\s]', ' ', content)
+
+            # 分词
+            words = list(jieba.cut(content))
+
+            # 去停用词和短词，保留有意义的词汇
+            filtered_words = [
+                word.strip() for word in words 
+                if (word.strip() and 
+                    word.strip() not in self.stopwords and 
+                    len(word.strip()) >= 2 and
+                    not word.strip().isdigit())  # 过滤纯数字
+            ]
+
+            return ' '.join(filtered_words)
+
+
+    # 词频检索
+    def textrank_search(self, query: str, inverted_index: Dict[str, Any], processed_files_content: Dict[str, str], file_word_count: Dict[str, Any], window_size: int = 3, damping: float = 0.85) -> Dict[str, Any]:
+        """
+        基于TextRank算法的文档检索
         Args:
             query: 搜索查询词
+            inverted_index: 倒排索引
+            processed_files_content: 文件内容字典
+            file_word_count: 文件词频统计
+            window_size: 共现窗口大小
+            damping: 阻尼系数
         Returns:
             检索结果字典
         """
@@ -278,61 +546,65 @@ class scearch_content:
             return {'found': False, 'message': '查询词无效', 'results': []}
 
         results = []
-        seen_docs = set()  # 用于跟踪已处理的文档
 
-        for word in query_words:
-            if word not in inverted_index:
+        # 为每个文档计算TextRank分数
+        for file_name, content in processed_files_content.items():
+            if content.startswith("错误:"):
                 continue
-            
-            term_info = inverted_index[word]
-            postings = term_info['postings']
 
-            sorted_docs = sorted(
-                postings.items(), 
-                key=lambda x: x[1]['freq'], 
-                reverse=True
-            )
+            # 预处理文档内容
+            processed_content = self.preprocess_query(content)
+            if not processed_content:
+                continue
 
-            for file_name, data in sorted_docs:
-                if file_name in seen_docs:
-                    continue
-                seen_docs.add(file_name)
+            # 检查文档是否包含查询词
+            doc_query_words = [word for word in query_words if word in processed_content]
+            if not doc_query_words:
+                continue
 
-                content = processed_files_content.get(file_name, '')
-                if content.startswith("错误:"):
-                    continue  
-                
-                preview = self.generate_content_preview(content, word)
-                word_freq = data['freq']
+            # 计算TextRank分数
+            textrank_scores = self._calculate_textrank_scores(processed_content, window_size, damping)
 
-                # 修复：计算文档总词数
-                total_terms = sum(file_word_count.get(file_name, {}).values())
-                if total_terms == 0:
-                    total_terms = 1  # 避免除零错误
+            # 计算查询词的综合分数
+            query_score = 0
+            matched_words = []
 
-                tf_score = word_freq / total_terms
+            for word in doc_query_words:
+                if word in textrank_scores:
+                    word_score = textrank_scores[word]
+                    query_score += word_score
+                    matched_words.append({
+                        'word': word,
+                        'textrank_score': round(word_score, 4),
+                        'frequency': processed_content.count(word)
+                    })
+
+            if query_score > 0:
+                # 生成内容预览
+                preview = self.generate_content_preview(content, doc_query_words[0])
+
+                # 计算文档相关性分数
+                doc_relevance = query_score / len(doc_query_words) if doc_query_words else 0
 
                 results.append({
                     'file_name': file_name,
-                    'matched_word': word,
-                    'word_frequency': word_freq,
-                    'tf_score': round(tf_score, 4),
+                    'textrank_score': round(query_score, 4),
+                    'relevance_score': round(doc_relevance, 4),
+                    'matched_words': matched_words,
                     'content_preview': preview,
-                    'positions': data['positions'][:5]  # 展示前5个位置
+                    'total_matched_terms': len(matched_words),
+                    'algorithm': 'TextRank'
                 })
 
-        results.sort(key=lambda x: (
-            x['word_frequency'],  # 直接按词频排序
-            x['tf_score']  # 其次按TF分数排序
-        ), reverse=True)
-
+        # 按TextRank分数排序
+        results.sort(key=lambda x: x['textrank_score'], reverse=True)
 
         return {
             'found': len(results) > 0,
             'query': query,
             'total_results': len(results),
             'results': results,
-            'message': f'找到 {len(results)} 个匹配文档' if results else '未找到匹配文档'
+            'message': f'TextRank检索找到 {len(results)} 个匹配文档' if results else 'TextRank检索未找到匹配文档'
         }
 
     # tfidf词向量检索，返回对应词每个文章中的查询词向量，以及文件路径 
@@ -422,30 +694,36 @@ class scearch_content:
                 'results': []
             }
     
-    # 词向量检索，返回对应词每个文章中的查询词向量，以及文件路径 
-    def word_vector_search(self, query: str, inverted_index: Dict[str, Any], processed_files_content: Dict[str, str], file_word_count: Dict[str, Any], all_content: List[str]) -> Dict[str, Any]:
+    def lsi_search(self, query: str, inverted_index: Dict[str, Any], processed_files_content: Dict[str, str], file_word_count: Dict[str, Any], all_content: List[str], n_components: int = 100) -> Dict[str, Any]:
         """
-        基于词向量的检索（使用CountVectorizer）
+        基于LSI（潜在语义索引）的检索
         Args:
             query: 搜索查询词
             inverted_index: 倒排索引
             processed_files_content: 文件内容字典
             file_word_count: 文件词频统计
             all_content: 所有文件内容列表
+            n_components: LSI降维后的维度数
         Returns:
             检索结果字典
         """
         if not query:
             return {'found': False, 'message': '查询词为空', 'results': []}
-
+    
         query_words = self.preprocess_query(query)
         if not query_words:
             return {'found': False, 'message': '查询词无效', 'results': []}
-
+    
         try:
-            # 使用CountVectorizer进行词向量化
-            vectorizer = CountVectorizer(max_features=50, min_df=1, max_df=0.8, ngram_range=(1, 2))
-
+            # 使用TF-IDF向量化作为LSI的输入
+            vectorizer = TfidfVectorizer(
+                max_features=1000,  # 增加特征数量以获得更好的语义表示
+                min_df=1, 
+                max_df=0.8, 
+                ngram_range=(1, 2),
+                stop_words=None  # 我们已经有自己的停用词处理
+            )
+    
             # 准备文档列表
             doc_list = []
             file_names = []
@@ -454,82 +732,109 @@ class scearch_content:
                     processed_content = self.preprocess_query(content)
                     doc_list.append(' '.join(processed_content))
                     file_names.append(file_name)
-
+    
             if not doc_list:
-                return {'found': False, 'message': '没有有效文档进行词向量分析', 'results': []}
-
-            # 构建词向量矩阵
-            word_matrix = vectorizer.fit_transform(doc_list)
-
-            # 处理查询
+                return {'found': False, 'message': '没有有效文档进行LSI分析', 'results': []}
+    
+            # 计算合适的LSI维度（不超过文档数量和词汇数量的最小值）
+            n_components = min(n_components, len(doc_list) - 1, 1000)
+            if n_components <= 0:
+                n_components = min(50, len(doc_list) - 1)
+    
+            # 构建LSI pipeline
+            lsi_pipeline = Pipeline([
+                ('tfidf', vectorizer),
+                ('svd', TruncatedSVD(n_components=n_components, random_state=42)),
+                ('normalizer', Normalizer(copy=False))
+            ])
+    
+            # 训练LSI模型并转换文档
+            doc_lsi_matrix = lsi_pipeline.fit_transform(doc_list)
+    
+            # 处理查询并转换到LSI空间
             query_processed = ' '.join(query_words)
-            query_vector = vectorizer.transform([query_processed])
-
-            # 计算余弦相似度
-            similarities = cosine_similarity(query_vector, word_matrix).flatten()
-
-            # 获取特征名称（词汇表）
+            query_lsi_vector = lsi_pipeline.transform([query_processed])
+    
+            # 计算LSI空间中的余弦相似度
+            similarities = cosine_similarity(query_lsi_vector, doc_lsi_matrix).flatten()
+    
+            # 获取原始TF-IDF特征名称
             feature_names = vectorizer.get_feature_names_out()
-
-            # 获取查询向量中的非零元素（匹配的词）
-            query_vector_dense = query_vector.toarray()[0]
-            matched_features = [(feature_names[i], query_vector_dense[i]) 
-                               for i in range(len(query_vector_dense)) 
-                               if query_vector_dense[i] > 0]
-
+            
+            # 获取查询在原始TF-IDF空间的表示
+            query_tfidf = vectorizer.transform([query_processed])
+            query_tfidf_dense = query_tfidf.toarray()[0]
+            
+            # 找到查询中的关键词及其TF-IDF权重
+            matched_features = [(feature_names[i], query_tfidf_dense[i]) 
+                               for i in range(len(query_tfidf_dense)) 
+                               if query_tfidf_dense[i] > 0]
+    
             # 获取相似度排序的文档索引
             doc_indices = similarities.argsort()[::-1]
-
+    
             results = []
             for idx in doc_indices:
                 similarity_score = similarities[idx]
-                if similarity_score > 0:  # 只返回有相似度的文档
+                if similarity_score > 0.01:  # 设置更低的阈值，因为LSI可能产生较小的相似度分数
                     file_name = file_names[idx]
                     content = processed_files_content[file_name]
-
-                    # 获取该文档的词向量
-                    doc_vector = word_matrix[idx].toarray()[0]
-
-                    # 找到在该文档中出现的查询词及其频率
-                    doc_matched_words = []
+    
+                    # 获取该文档在LSI空间的表示
+                    doc_lsi_vector = doc_lsi_matrix[idx]
+                    
+                    # 计算语义相关的词汇
+                    doc_tfidf = vectorizer.transform([doc_list[idx]])
+                    doc_tfidf_dense = doc_tfidf.toarray()[0]
+                    
+                    # 找到文档中与查询语义相关的词汇
+                    semantic_matched_words = []
                     for word in query_words:
                         if word in feature_names:
                             word_idx = list(feature_names).index(word)
-                            if doc_vector[word_idx] > 0:
-                                doc_matched_words.append({
+                            if doc_tfidf_dense[word_idx] > 0:
+                                semantic_matched_words.append({
                                     'word': word,
-                                    'frequency': int(doc_vector[word_idx])
+                                    'tfidf_weight': round(doc_tfidf_dense[word_idx], 4),
+                                    'frequency': processed_files_content[file_name].lower().count(word.lower())
                                 })
-
+    
+                    # 获取LSI主题信息
+                    lsi_components = self._get_top_lsi_terms(lsi_pipeline, feature_names, doc_lsi_vector)
+    
                     preview = self.generate_content_preview(content, query_words[0])
-
+    
                     results.append({
                         'file_name': file_name,
-                        'vector_similarity': round(similarity_score, 4),
-                        'matched_word_vectors': doc_matched_words,
+                        'lsi_similarity': round(similarity_score, 4),
+                        'semantic_matched_words': semantic_matched_words,
+                        'lsi_components': lsi_components[:5],  # 前5个主要LSI成分
                         'content_preview': preview,
-                        'total_matched_terms': len(doc_matched_words),
-                        'relevance': 'high' if similarity_score > 0.5 else 'medium' if similarity_score > 0.2 else 'low'
+                        'total_matched_terms': len(semantic_matched_words),
+                        'algorithm': 'LSI',
+                        'relevance': 'high' if similarity_score > 0.3 else 'medium' if similarity_score > 0.1 else 'low'
                     })
-
+    
             return {
                 'found': len(results) > 0,
                 'query': query,
-                'query_vector_info': {
-                    'matched_features': matched_features,
+                'lsi_info': {
+                    'n_components': n_components,
+                    'query_features': matched_features[:10],  # 前10个查询特征
                     'total_query_terms': len(matched_features)
                 },
                 'total_results': len(results),
                 'results': results[:20],  # 限制返回前20个结果
-                'message': f'词向量检索找到 {len(results)} 个相关文档' if results else '词向量检索未找到相关文档'
+                'message': f'LSI检索找到 {len(results)} 个语义相关文档' if results else 'LSI检索未找到语义相关文档'
             }
-
+    
         except Exception as e:
             return {
                 'found': False,
-                'message': f'词向量检索过程中发生错误: {str(e)}',
+                'message': f'LSI检索过程中发生错误: {str(e)}',
                 'results': []
             }
+
         
 class Visualization:
     def __init__(self):
